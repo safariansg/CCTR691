@@ -1,0 +1,11 @@
+---
+title: "Hello World"
+author: Gevick Safarians
+date: August 21 2025
+output: html_notebook
+---
+
+```{r}
+print("Hello World")
+```
+
