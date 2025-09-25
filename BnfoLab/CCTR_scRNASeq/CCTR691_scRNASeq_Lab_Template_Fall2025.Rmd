@@ -1,0 +1,401 @@
+---
+title: "CCTR691 Single Cell RNASeq Lab"
+author: "Gevick Safarians"
+date: "09.25.2025"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Single Cell RNASeq Lab
+
+### Primary Goal:
+
+> Perform QC analysis on a single cell data set using the R Seurat package.
+
+### Instructions:
+
+Use the Athena terminal to set up your lab directory and obtain needed files.
+
+*In the event the cluster is down, use Canvas to download the needed files into a directory on your laptop and complete the lab locally.*
+
+To get help using any command, type “?” followed by the command to see the documentation.  E.g. “?plot”
+
+
+```{bash, eval=FALSE}
+# create and navigate into a new directory for this lab
+mkdir scRNASeq
+cd scRNASeq
+
+# Copy feature count directory
+cp -r /lustre/home/git_repos/CCTR691/scRNASeq/filtered_feature_bc_matrix_WHIM2_106361_HumanOnly .
+
+# Copy supporting files
+cp /lustre/home/git_repos/CCTR691/scRNASeq/MitoCodingGenes13_human.txt .
+cp /lustre/home/git_repos/CCTR691/scRNASeq/UCD52CR_107086_web_summary.html .
+```
+
+## Submission: 
+
+This Rmd file and its associated HTML output will be submitted to GitHub. The GitHub URL will be submitted to Canvas.
+
+### Section 1: Exploring 10X HTML QC Files
+The majority of this lab will be completed in the Rmarkdown template EXCEPT this first section.
+
+Download the “UCD52CR_107086_web_summary.html” file to your laptop and open it in a web browser, then answer the first set of questions in the RMarkdown template.
+
+########## 
+### Questions 1 and 2
+##########
+
+Q1) Was this sample aligned to a SINGLE or MULTIPLE genomes?
+
+> This sample was aligned to the human hg19 genome and mouse mm10 genome, thus, multiple.
+
+Q2) With the knowledge that we expect about 5000 cells from this sample, list at least 2 red flags identified by this report.  Be sure to explore both tabs.
+
+> There seems to be a large number of multiplets, bumping the cell count up from the expected 5000 to 17,000. Also, only 50% and 11% of the reads were mapped during alignment/mapping to the human and mouse genomes, respectively. Reads per cell is quite elevated as well - likely due to the multiplet data. There is also no "knee" in the UMI count to barcodes plot. The distribution currently indicates there isn't a clear separation between what could be "nonviable cells" and "viable cells" due to the shear number of multiplets present within the data. t-SNE does not show good separation of clusters. 
+
+## Section 2: QC analysis and Dead Cell Removal using the Seruat package in R
+
+Follow the instructions and code to remove dead cells, generate violin plots, cluster, and create tSNE plots of the sample data.
+
+The sample data you are using is publicly available on GEO (Gene Expression Omnibus) in the Series GSE174391, only it is merged with other samples.  For this lab I am providing you with the single WHIM2 PDX sample that has already had the mouse cells removed (so you only have human data).
+
+Follow the steps below and answer the questions.  This lab is based off of, but not exactly the same as, the Seurat introductory tutorial.  Feel free to [explore that tutorial for more in-depth information](https://satijalab.org/seurat/articles/pbmc3k_tutorial.html).
+
+### Set working directory and load libraries
+
+ - Use the File navigation pane to navigate to your working lab directory that contains this and the other files.
+
+ - Select the blue gear and click "Set As Working Directory".  
+
+ - Look in the console for a setwd() command. COPY the path it uses to the code block below to set your working directory globally for this workbook.
+
+ - Click the green "play" button to execute the code chunk.
+
+```{r setup}
+knitr::opts_knit$set(root.dir = "~/Downloads/CCTR691_scRNASeq")
+```
+
+```{r loadlibs}
+library(Seurat)
+library(dplyr)
+```
+
+### Load dataset, initilize Seurat Object and View object properties
+```{r}
+#Load the WHIM2 dataset into Seurat:
+whim.data <- Read10X(data.dir = "./filtered_feature_bc_matrix_WHIM2_106361_HumanOnly")
+
+#Initialize the Seruat Object:
+whim <- CreateSeuratObject(counts = whim.data, project = "whim2", min.cells = 3, min.features = 200)
+
+#View a summary of the object:
+whim
+```
+
+
+In the environment tab of the RStudio interface, click on the “whim” object to expand and explore it.  Look for the “meta.data” section.  This is the most important section as it is where your new annotations are stored, and it tells you the name of annotations added by clustering and other processing.
+
+########## 
+### Questions 3 and 4
+##########
+
+Q3) What metadata elements are listed in this section?
+
+> It lists the orig.ident (identify of the data for reference in code), nCount_RNA (number of reads), and nFeature_RNA (number of genes).
+
+Q4) I told you this is 1 PDX sample, but the summary of the Seurat object says differently.  How many samples does this object have?  What is this actually telling you?  What does the 19,612 number represent?
+
+> This object has 2575 samples, this is the cell count - not the number of samples the data was originally derived from. The 19,612 is feature count meaning the number of genes identified across all of these cells.
+
+
+### Assess Percentage of Mitochondrial Gene Expression
+
+```{r}
+# Load in the mitochondrial gene IDs:
+mitogene_ids <- read.delim("./MitoCodingGenes13_human.txt", header = FALSE, stringsAsFactors = FALSE)[[1]]
+
+# Add the percentage of mito expression as an annotation to your Seurat object:
+whim[["percent.mt"]] <- PercentageFeatureSet(whim, features = mitogene_ids)
+
+# Create a Violin plot of the mito expression, nFeature and nCount data 
+# These last 2 were already in the dataset by default, so we didn’t need to add them.
+VlnPlot(whim, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = .4)
+```
+
+########## 
+### Question 5
+##########
+
+Q5) What is a reasonable filtering criteria for the percent of mitochondria expression?
+
+> Typically, a 25% cut off is used, however, it comes down to the nature of the dataset. For example, certain cancers have excess mitochondrial activation, thus, it's likely for this one that a cut off of ~30-35% should be used. 
+
+Sub set your cells to remove those that do not pass your mitochondrial cutoff.
+Make sure to replace the “ADD_YOUR_CUTOFF_HERE” with the appropriate expression 
+(i.e. “> x” or “< x” where “x” is the threshold you specified in Q5 - do not include the quotation marks).
+
+```{r}
+# subset the seurat object for only cells passing your cutoff and print out the new violin plot
+whim_filtered <- subset(whim, subset = percent.mt < 25)
+
+# print new violin plot
+VlnPlot(whim_filtered, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = .4)
+```
+
+Note that we now have two (2) Seurat data sets, “whim” contains the full unfiltered dataset, and “whim_filtered” contains the filtered dataset.
+
+########## 
+### Questions 6 and 7
+##########
+
+Q6) How many cells survived the filtering? Print out the new "whim_filtered" object to figure this out.
+
+```{r}
+whim_filtered
+```
+
+> Only 1314 cells survived the filtering. 
+
+Q7) Compare the 2 plots, before and after. What can you conclude about the cells that did not make the mitochondrial cutoff in terms of nFeature and nCount?
+ If you want to print both plots in the same R code chunk to compare more easily you can do that.
+
+> After filtering based on mitochondrial status, ther number of cells with low features (low genes) and low counts (reads) is far less than prior to filtering based on mitochondrial status. This likely indicates that low quality cells (i.e. dead or dying cells) were removed.  
+
+You can continue to filter on nFeature and nCount, and I generally do, but for the purposes of this lab we will leave the dataset as-is and move on to normalization and clustering.
+
+
+## Section 3: Normalization, Top Variable Features, PCA, Clustering, and Visualization
+
+Before we can cluster the data and create those cool tSNE and UMAP visualizations, we need to normalize and scale the data, and run a PCA analysis.  However, this can take a long time if we use all genes.  Thus, we will reduce the set used to the most variable genes (don’t worry, the rest are still there).
+
+### Identify the top variable genes
+
+```{r}
+# Using the “whim_filtered” Seurat data set, normalize the data.
+whim_filtered <- NormalizeData(whim_filtered)
+
+# Before creating the visualizations, we need to reduce the dataset down to only 
+# those genes with the most variance.  These will be our top 2000 most variable features.
+whim_filtered <- FindVariableFeatures(whim_filtered, selection.method = "vst", nfeatures = 2000)
+
+top10 <- head(VariableFeatures(whim_filtered), 10)
+
+# Plot the top10 most variable genes as a scatter plot and mark the top 10
+plot1 <- VariableFeaturePlot(whim_filtered)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot2
+
+```
+
+
+########## 
+### Question 8
+##########
+
+Q8) Which gene is the most variable?
+
+> SCGB2A2
+
+### Scaling and PCA Analysis
+
+What does scaling do? 
+* Shifts the expression of each gene, so that the mean expression across cells is 0
+* Scales the expression of each gene, so that the variance across cells is 1
+* This step gives equal weight in downstream analyses, so that highly-expressed genes do not dominate
+
+Principle Component Analysis is a dimension reduction technique that transforms 
+large data sets with a lot of dimensions into a data set with fewer dimensions, but
+still retains the majority of the information present, such as variability, in the 
+initial data set.  In single cell RNASeq it is used as a first step to identify the 
+most informative principle components that should be used for data visualization by UMAP and tSNE.
+
+```{r, fig.height=20}
+# scale data
+whim_filtered <- ScaleData(whim_filtered)
+
+# run PCA
+whim_filtered <- RunPCA(whim_filtered, features = VariableFeatures(object = whim_filtered))
+
+# create heatmap
+DimHeatmap(whim_filtered, dims = 1:15, cells = 500, balanced = TRUE)
+```
+
+########## 
+### Question 9-11
+##########
+
+Q9) What are the axes of each heatmap?  
+
+> The y-axis is genes, x-axis is cell numbers (for this case, there's 500)
+
+Q10) How many cells are used in each heatmap?  
+
+> 500
+
+Q11) Describe what happens when the principal component (PC) number gets higher.
+
+> The variance between differentially expressed genes decreases as the principal component number gets higher. That's because the first eigenvector always captures the greatest variance between data points in higher dimensional space and it continues to decrease as the eigenvector (principal component) increases. 
+
+### Determining the optima number of Principle Components
+
+To visualize single cell data we need to use enough PCs to represent the variability 
+in the data without adding too much noise or having too little.  An Elbow plot can help with 
+this along with looking at the DimHeatmap plots. We need to pick a threshold close to the 
+elbow in the plot.  This indicates where not much more information is being added.  
+For the plot generated by the command below it looks to be around 5; however, the 
+default is usually 15, which is a good cutoff for most datasets.
+
+```{r}
+# draw elbow plot
+ElbowPlot(whim_filtered)
+
+#Create a tSNE plot using the first 5 dimensions.
+whim_filtered <- RunTSNE(whim_filtered, dims = 1:5)
+DimPlot(whim_filtered, reduction = "tsne")
+
+# add additional code here based on Question 12
+```
+
+
+########## 
+### Question 12
+##########
+
+Q12) In the code block above, copy the 2 lines of code that generated the tSNE plot to answer the following questions. Note I am expecting at least 4 plots.
+
+What happens when you use fewer dimensions?  
+
+```{r}
+
+#Create a tSNE plot using the first 2 dimensions.
+whim_filtered <- RunTSNE(whim_filtered, dims = 1:2)
+DimPlot(whim_filtered, reduction = "tsne")
+
+```
+
+> The distance between points in the t-SNE increases when you use less dimensions because you are utilizing a lower number of principal component vectors. 
+
+How about only the first dimension? 
+
+```{r}
+
+#Create a tSNE plot using the first dimension.
+whim_filtered <- RunTSNE(whim_filtered, dims = 1)
+DimPlot(whim_filtered, reduction = "tsne")
+
+```
+
+> The clusters that form are only based on distances between points along a single vector, so we see strings rather than clusters.
+
+What happens when you use more dimensions?
+
+```{r}
+
+#Create a tSNE plot using the first 30 dimensions.
+whim_filtered <- RunTSNE(whim_filtered, dims = 1:50)
+DimPlot(whim_filtered, reduction = "tsne")
+
+```
+
+> The definition of clustering increases! That's because we're utilizing a greater number of principal components to perform the t-SNE graphs. 
+
+### Gene Expression and Clustering
+
+This flat pink plot is pretty boring.  Let’s add some color by coloring each cell 
+with the expression level of the 2 top most variable genes you identified in Q8.  
+
+```{r}
+# change dimensions back to 1:5
+whim_filtered <- RunTSNE(whim_filtered, dims = 1:5)
+
+# create the feature plot
+FeaturePlot(whim_filtered, features = c("SCGB2A2", "LALBA"), reduction = "tsne")
+
+```
+
+You should get 2 plots with the most highly expressed gene grouped into a single location.  This could be a cluster of cells with similar gene expression profiles.  To find out, let’s cluster the dataset, and then color the tSNE plot by cluster.
+
+```{r}
+# find nearest neighbors and cluster cells
+whim_filtered <- FindNeighbors(whim_filtered, dims = 1:5)
+whim_filtered <- FindClusters(whim_filtered, resolution = 0.5)
+
+# overlay cluster colors onto dim plot
+DimPlot(whim_filtered, reduction = "tsne", group.by = "seurat_clusters")
+```
+
+########## 
+### Question 13
+##########
+
+Q13) Which cluster includes the 2 genes you plotted in Q11?
+
+> All of the clusters. 
+
+### Differential Gene Expression Analysis
+
+Now we can explore each gene one at a time, which is not very efficient.  
+Next we will run an all-by-all differential expression analysis to identify the top 20 gene markers for each cluster.
+
+```{r}
+# find marker genes for each cluster
+whim_filtered.markers <- FindAllMarkers(whim_filtered, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+# identify the top 20 marker genes for each cluster
+top20 <- whim_filtered.markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC)
+
+# plot marker gene expression for each cluster
+DoHeatmap(whim_filtered, features = top20$gene)
+```
+
+########## 
+### Question 14 and 15
+##########
+
+Q14) What is the x-axis for in this plot? 
+
+> Cells.
+
+Q15) Which 2 clusters have the most distinct expression profile from the rest of the clusters?
+
+> Cluster 1 and 4. 
+
+### Exporting DEG Results
+
+Finally, let’s export your list of differential expressed genes to a text file.  
+First filter base on significant p-value, then save to a file. 
+Column explanations are as follows:
+
+* **P_val:** the unadjusted p-value
+* **avg_log2FC:** the average log2 fold change for this gene comparing cells in the active cluster to all other cells in the dataset.
+* **Pct.1:** the percent of cells in the active cluster that express the given gene.
+* **Pct.2:** the percent of all other cells that express this gene (used as the control condition).
+* **P_val_adj:** the p-value adjusted for multiple testing correction.
+* **Cluster:** the active cluster
+* **Gene:** the gene ID
+
+```{r}
+# filter on adjusted pval
+whim_filtered.markers <- whim_filtered.markers[whim_filtered.markers$p_val_adj <= 0.001,]
+
+# save to a CSV file
+write.csv(whim_filtered.markers, file="whim_filtered_SignificantMarkerGenes.csv", quote = FALSE)
+```
+
+########## 
+### Question 16
+##########
+
+Either through Athena, or by downloading this file, open the CSV file and answer the following question.
+
+Q16) What is the log2FC of the top most variable gene you identified in Q8?
+
+> LALBA: 1.0294179269377; SCGB2A2: 2.79986898143682
+
+## Section 4: Save and upload via GitHub
+
+Finally, save this file, then knit your HTML report for submission via GitHub.  
+Go back to the Word document for github instructions!
